@@ -8,14 +8,14 @@ using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading.Tasks;
-using GitHubSkills;
 using KernelHttpServer.Config;
+using KernelHttpServer.Plugins;
 using Microsoft.Azure.Functions.Worker.Http;
 using Microsoft.Extensions.Logging;
 using Microsoft.Graph;
 using Microsoft.SemanticKernel;
-using Microsoft.SemanticKernel.CoreSkills;
 using Microsoft.SemanticKernel.SkillDefinition;
+using Microsoft.SemanticKernel.Skills.Core;
 using Microsoft.SemanticKernel.Skills.Document;
 using Microsoft.SemanticKernel.Skills.Document.FileSystem;
 using Microsoft.SemanticKernel.Skills.Document.OpenXml;
@@ -132,11 +132,9 @@ internal static class Extensions
 
     internal static void RegisterTextMemory(this IKernel kernel)
     {
-        _ = kernel.ImportSkill(new TextMemorySkill(), nameof(TextMemorySkill));
+        _ = kernel.ImportSkill(new TextMemorySkill(kernel.Memory), nameof(TextMemorySkill));
     }
 
-    [SuppressMessage("Reliability", "CA2000:Dispose objects before losing scope",
-        Justification = "The caller invokes native skills during a request and the skill instances must remain alive for those requests to be successful.")]
     internal static void RegisterNativeSkills(this IKernel kernel, IEnumerable<string>? skillsToLoad = null)
     {
         if (ShouldLoad(nameof(DocumentSkill), skillsToLoad))
@@ -157,11 +155,10 @@ internal static class Extensions
             _ = kernel.ImportSkill(webFileDownloadSkill, nameof(WebFileDownloadSkill));
         }
 
-        if (ShouldLoad(nameof(GitHubSkill), skillsToLoad))
+        if (ShouldLoad(nameof(GitHubPlugin), skillsToLoad))
         {
-            var downloadSkill = new WebFileDownloadSkill();
-            GitHubSkill githubSkill = new(kernel, downloadSkill);
-            _ = kernel.ImportSkill(githubSkill, nameof(GitHubSkill));
+            GitHubPlugin githubPlugin = new(kernel);
+            _ = kernel.ImportSkill(githubPlugin, nameof(GitHubPlugin));
         }
     }
 

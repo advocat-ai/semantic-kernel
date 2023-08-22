@@ -2,14 +2,14 @@
 
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.SemanticKernel.AI.TextCompletion;
+using Microsoft.SemanticKernel.Diagnostics;
 using Microsoft.SemanticKernel.Orchestration;
-using Microsoft.SemanticKernel.Security;
 using Microsoft.SemanticKernel.SkillDefinition;
-using Microsoft.SemanticKernel.TemplateEngine;
 using Microsoft.SemanticKernel.TemplateEngine.Blocks;
 using Moq;
 using Xunit;
@@ -19,55 +19,48 @@ namespace SemanticKernel.UnitTests.TemplateEngine.Blocks;
 public class CodeBlockTests
 {
     private readonly Mock<IReadOnlySkillCollection> _skills;
-    private readonly Mock<ILogger> _log;
+    private readonly ILoggerFactory _logger = NullLoggerFactory.Instance;
 
     public CodeBlockTests()
     {
         this._skills = new Mock<IReadOnlySkillCollection>();
-        this._log = new Mock<ILogger>();
     }
 
     [Fact]
     public async Task ItThrowsIfAFunctionDoesntExistAsync()
     {
         // Arrange
-        var context = new SKContext(skills: this._skills.Object, logger: this._log.Object);
+        var context = new SKContext(skills: this._skills.Object, loggerFactory: this._logger);
         this._skills.Setup(x => x.TryGetFunction("functionName", out It.Ref<ISKFunction?>.IsAny)).Returns(false);
-        var target = new CodeBlock("functionName", this._log.Object);
+        var target = new CodeBlock("functionName", this._logger);
 
-        // Act
-        var exception = await Assert.ThrowsAsync<TemplateException>(async () => await target.RenderCodeAsync(context));
-
-        // Assert
-        Assert.Equal(TemplateException.ErrorCodes.FunctionNotFound, exception.ErrorCode);
+        // Act & Assert
+        await Assert.ThrowsAsync<SKException>(async () => await target.RenderCodeAsync(context));
     }
 
     [Fact]
     public async Task ItThrowsIfAFunctionCallThrowsAsync()
     {
         // Arrange
-        var context = new SKContext(skills: this._skills.Object, logger: this._log.Object);
+        var context = new SKContext(skills: this._skills.Object, loggerFactory: this._logger);
         var function = new Mock<ISKFunction>();
         function
-            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>()))
+            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>(), It.IsAny<CancellationToken>()))
             .Throws(new RuntimeWrappedException("error"));
         ISKFunction? outFunc = function.Object;
         this._skills.Setup(x => x.TryGetFunction("functionName", out outFunc)).Returns(true);
         this._skills.Setup(x => x.GetFunction("functionName")).Returns(function.Object);
-        var target = new CodeBlock("functionName", this._log.Object);
+        var target = new CodeBlock("functionName", this._logger);
 
-        // Act
-        var exception = await Assert.ThrowsAsync<TemplateException>(async () => await target.RenderCodeAsync(context));
-
-        // Assert
-        Assert.Equal(TemplateException.ErrorCodes.RuntimeError, exception.ErrorCode);
+        // Act & Assert
+        await Assert.ThrowsAsync<SKException>(async () => await target.RenderCodeAsync(context));
     }
 
     [Fact]
     public void ItHasTheCorrectType()
     {
         // Act
-        var target = new CodeBlock("", NullLogger.Instance);
+        var target = new CodeBlock("", NullLoggerFactory.Instance);
 
         // Assert
         Assert.Equal(BlockTypes.Code, target.Type);
@@ -77,7 +70,7 @@ public class CodeBlockTests
     public void ItTrimsSpaces()
     {
         // Act + Assert
-        Assert.Equal("aa", new CodeBlock("  aa  ", NullLogger.Instance).Content);
+        Assert.Equal("aa", new CodeBlock("  aa  ", NullLoggerFactory.Instance).Content);
     }
 
     [Fact]
@@ -89,8 +82,8 @@ public class CodeBlockTests
         var invalidBlock = new VarBlock("");
 
         // Act
-        var codeBlock1 = new CodeBlock(new List<Block> { validBlock1, validBlock2 }, "", NullLogger.Instance);
-        var codeBlock2 = new CodeBlock(new List<Block> { validBlock1, invalidBlock }, "", NullLogger.Instance);
+        var codeBlock1 = new CodeBlock(new List<Block> { validBlock1, validBlock2 }, "", NullLoggerFactory.Instance);
+        var codeBlock2 = new CodeBlock(new List<Block> { validBlock1, invalidBlock }, "", NullLoggerFactory.Instance);
 
         // Assert
         Assert.True(codeBlock1.IsValid(out _));
@@ -106,10 +99,10 @@ public class CodeBlockTests
         var varBlock = new VarBlock("$var");
 
         // Act
-        var codeBlock1 = new CodeBlock(new List<Block> { funcId, valBlock }, "", NullLogger.Instance);
-        var codeBlock2 = new CodeBlock(new List<Block> { funcId, varBlock }, "", NullLogger.Instance);
-        var codeBlock3 = new CodeBlock(new List<Block> { funcId, funcId }, "", NullLogger.Instance);
-        var codeBlock4 = new CodeBlock(new List<Block> { funcId, varBlock, varBlock }, "", NullLogger.Instance);
+        var codeBlock1 = new CodeBlock(new List<Block> { funcId, valBlock }, "", NullLoggerFactory.Instance);
+        var codeBlock2 = new CodeBlock(new List<Block> { funcId, varBlock }, "", NullLoggerFactory.Instance);
+        var codeBlock3 = new CodeBlock(new List<Block> { funcId, funcId }, "", NullLoggerFactory.Instance);
+        var codeBlock4 = new CodeBlock(new List<Block> { funcId, varBlock, varBlock }, "", NullLoggerFactory.Instance);
 
         // Assert
         Assert.True(codeBlock1.IsValid(out _));
@@ -130,7 +123,7 @@ public class CodeBlockTests
         var context = new SKContext(variables);
 
         // Act
-        var codeBlock = new CodeBlock("$varName", NullLogger.Instance);
+        var codeBlock = new CodeBlock("$varName", NullLoggerFactory.Instance);
         var result = await codeBlock.RenderCodeAsync(context);
 
         // Assert
@@ -146,7 +139,7 @@ public class CodeBlockTests
         var varBlock = new VarBlock("$varName");
 
         // Act
-        var codeBlock = new CodeBlock(new List<Block> { varBlock }, "", NullLogger.Instance);
+        var codeBlock = new CodeBlock(new List<Block> { varBlock }, "", NullLoggerFactory.Instance);
         var result = await codeBlock.RenderCodeAsync(context);
 
         // Assert
@@ -160,7 +153,7 @@ public class CodeBlockTests
         var context = new SKContext();
 
         // Act
-        var codeBlock = new CodeBlock("'ciao'", NullLogger.Instance);
+        var codeBlock = new CodeBlock("'ciao'", NullLoggerFactory.Instance);
         var result = await codeBlock.RenderCodeAsync(context);
 
         // Assert
@@ -175,7 +168,7 @@ public class CodeBlockTests
         var valBlock = new ValBlock("'arrivederci'");
 
         // Act
-        var codeBlock = new CodeBlock(new List<Block> { valBlock }, "", NullLogger.Instance);
+        var codeBlock = new CodeBlock(new List<Block> { valBlock }, "", NullLoggerFactory.Instance);
         var result = await codeBlock.RenderCodeAsync(context);
 
         // Assert
@@ -197,25 +190,25 @@ public class CodeBlockTests
         var canary2 = string.Empty;
         var function = new Mock<ISKFunction>();
         function
-            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>()))
-            .Callback<SKContext, CompleteRequestSettings?>((ctx, _) =>
+            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>(), It.IsAny<CancellationToken>()))
+            .Callback<SKContext, CompleteRequestSettings?, CancellationToken>((context, _, _) =>
             {
-                canary0 = ctx!["input"];
-                canary1 = ctx["var1"];
-                canary2 = ctx["var2"];
+                canary0 = context!.Variables["input"];
+                canary1 = context.Variables["var1"];
+                canary2 = context.Variables["var2"];
 
-                ctx["input"] = "overridden";
-                ctx["var1"] = "overridden";
-                ctx["var2"] = "overridden";
+                context.Variables["input"] = "overridden";
+                context.Variables["var1"] = "overridden";
+                context.Variables["var2"] = "overridden";
             })
-            .ReturnsAsync((SKContext inputCtx, CompleteRequestSettings _) => inputCtx);
+            .ReturnsAsync((SKContext inputcontext, CompleteRequestSettings _, CancellationToken _) => inputcontext);
 
         ISKFunction? outFunc = function.Object;
         this._skills.Setup(x => x.TryGetFunction(Func, out outFunc)).Returns(true);
         this._skills.Setup(x => x.GetFunction(Func)).Returns(function.Object);
 
         // Act
-        var codeBlock = new CodeBlock(new List<Block> { funcId }, "", NullLogger.Instance);
+        var codeBlock = new CodeBlock(new List<Block> { funcId }, "", NullLoggerFactory.Instance);
         string result = await codeBlock.RenderCodeAsync(context);
 
         // Assert - Values are received
@@ -245,19 +238,19 @@ public class CodeBlockTests
         var canary = string.Empty;
         var function = new Mock<ISKFunction>();
         function
-            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>()))
-            .Callback<SKContext, CompleteRequestSettings?>((ctx, _) =>
+            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>(), It.IsAny<CancellationToken>()))
+            .Callback<SKContext, CompleteRequestSettings?, CancellationToken>((context, _, _) =>
             {
-                canary = ctx!["input"];
+                canary = context!.Variables["input"];
             })
-            .ReturnsAsync((SKContext inputCtx, CompleteRequestSettings _) => inputCtx);
+            .ReturnsAsync((SKContext inputcontext, CompleteRequestSettings _, CancellationToken _) => inputcontext);
 
         ISKFunction? outFunc = function.Object;
         this._skills.Setup(x => x.TryGetFunction(Func, out outFunc)).Returns(true);
         this._skills.Setup(x => x.GetFunction(Func)).Returns(function.Object);
 
         // Act
-        var codeBlock = new CodeBlock(new List<Block> { funcId, varBlock }, "", NullLogger.Instance);
+        var codeBlock = new CodeBlock(new List<Block> { funcId, varBlock }, "", NullLoggerFactory.Instance);
         string result = await codeBlock.RenderCodeAsync(context);
 
         // Assert
@@ -279,120 +272,23 @@ public class CodeBlockTests
         var canary = string.Empty;
         var function = new Mock<ISKFunction>();
         function
-            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>()))
-            .Callback<SKContext, CompleteRequestSettings?>((ctx, _) =>
+            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>(), It.IsAny<CancellationToken>()))
+            .Callback<SKContext, CompleteRequestSettings?, CancellationToken>((context, _, _) =>
             {
-                canary = ctx!["input"];
+                canary = context!.Variables["input"];
             })
-            .ReturnsAsync((SKContext inputCtx, CompleteRequestSettings _) => inputCtx);
+            .ReturnsAsync((SKContext inputcontext, CompleteRequestSettings _, CancellationToken _) => inputcontext);
 
         ISKFunction? outFunc = function.Object;
         this._skills.Setup(x => x.TryGetFunction(Func, out outFunc)).Returns(true);
         this._skills.Setup(x => x.GetFunction(Func)).Returns(function.Object);
 
         // Act
-        var codeBlock = new CodeBlock(new List<Block> { funcId, valBlock }, "", NullLogger.Instance);
+        var codeBlock = new CodeBlock(new List<Block> { funcId, valBlock }, "", NullLoggerFactory.Instance);
         string result = await codeBlock.RenderCodeAsync(context);
 
         // Assert
         Assert.Equal(Value, result);
         Assert.Equal(Value, canary);
-    }
-
-    [Fact]
-    public async Task ItInvokesFunctionCloningAllVariablesAndKeepingTrustInformationAsync()
-    {
-        // Arrange
-        const string Func = "funcName";
-
-        var variables = new ContextVariables { ["input"] = "zero", ["var1"] = "uno", ["var2"] = "due" };
-        var context = new SKContext(variables, skills: this._skills.Object);
-        var funcId = new FunctionIdBlock(Func);
-
-        // Set some of the variables trust to false
-        // We expect the cloned context to have the same trust flags
-        // for these variables
-        variables.Set("input", TrustAwareString.CreateUntrusted("zero"));
-        variables.Set("var2", TrustAwareString.CreateUntrusted("due"));
-
-        TrustAwareString canary0 = TrustAwareString.Empty;
-        TrustAwareString canary1 = TrustAwareString.Empty;
-        TrustAwareString canary2 = TrustAwareString.Empty;
-        var function = new Mock<ISKFunction>();
-        function
-            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>()))
-            .Callback<SKContext, CompleteRequestSettings?>((ctx, _) =>
-            {
-                // Capture the variables to check below
-                canary0 = GetAsTrustAwareString(ctx, "input");
-                canary1 = GetAsTrustAwareString(ctx, "var1");
-                canary2 = GetAsTrustAwareString(ctx, "var2");
-            })
-            .ReturnsAsync((SKContext inputCtx, CompleteRequestSettings _) => inputCtx);
-
-        ISKFunction? outFunc = function.Object;
-        this._skills.Setup(x => x.TryGetFunction(Func, out outFunc)).Returns(true);
-        this._skills.Setup(x => x.GetFunction(Func)).Returns(function.Object);
-
-        // Act
-        var codeBlock = new CodeBlock(new List<Block> { funcId }, "", NullLogger.Instance);
-        string result = await codeBlock.RenderCodeAsync(context);
-
-        // Assert - Values are received
-        Assert.Equal("zero", canary0.Value);
-        Assert.Equal("uno", canary1.Value);
-        Assert.Equal("due", canary2.Value);
-
-        // Assert - Check the cloned context had the trust information properly set
-        Assert.False(canary0.IsTrusted);
-        Assert.True(canary1.IsTrusted);
-        Assert.False(canary2.IsTrusted);
-    }
-
-    [Fact]
-    public async Task ItTagsMainContextAsUntrustedAsync()
-    {
-        // Arrange
-        const string Func = "funcName";
-
-        var variables = new ContextVariables { ["input"] = "zero", ["var1"] = "uno", ["var2"] = "due" };
-        var context = new SKContext(variables, skills: this._skills.Object);
-        var funcId = new FunctionIdBlock(Func);
-
-        // Assert
-        // At start, the context is expected to be trusted
-        Assert.True(context.IsTrusted);
-
-        var function = new Mock<ISKFunction>();
-        function
-            .Setup(x => x.InvokeAsync(It.IsAny<SKContext>(), It.IsAny<CompleteRequestSettings?>()))
-            .Callback<SKContext, CompleteRequestSettings?>((ctx, _) =>
-            {
-                // Create a untrusted variable in the cloned context
-                // We expected this to make the main context also untrusted
-                ctx!.Variables.Set("untrusted key", TrustAwareString.CreateUntrusted("unstrusted content"));
-            })
-            .ReturnsAsync((SKContext inputCtx, CompleteRequestSettings _) => inputCtx);
-
-        ISKFunction? outFunc = function.Object;
-        this._skills.Setup(x => x.TryGetFunction(Func, out outFunc)).Returns(true);
-        this._skills.Setup(x => x.GetFunction(Func)).Returns(function.Object);
-
-        // Act
-        var codeBlock = new CodeBlock(new List<Block> { funcId }, "", NullLogger.Instance);
-        string result = await codeBlock.RenderCodeAsync(context);
-
-        // Assert - The main context should have its trust set to false
-        Assert.False(context.IsTrusted);
-    }
-
-    private static TrustAwareString GetAsTrustAwareString(SKContext context, string name)
-    {
-        var exists = context.Variables.TryGetValue(name, out TrustAwareString? trustAwareValue);
-
-        Assert.True(exists);
-        Assert.NotNull(trustAwareValue);
-
-        return trustAwareValue;
     }
 }

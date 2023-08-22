@@ -3,9 +3,26 @@
 """A basic JSON-based planner for the Python Semantic Kernel"""
 import json
 
+import regex
+
 from semantic_kernel.kernel import Kernel
 from semantic_kernel.orchestration.context_variables import ContextVariables
-from semantic_kernel.planning.plan import Plan
+
+
+class Plan:
+    """A simple plan object for the Semantic Kernel"""
+
+    def __init__(self, prompt: str, goal: str, plan: str):
+        self.prompt = prompt
+        self.goal = goal
+        self.generated_plan = plan
+
+    def __str__(self):
+        return f"Prompt: {self.prompt}\nGoal: {self.goal}\nPlan: {self.plan}"
+
+    def __repr__(self):
+        return str(self)
+
 
 PROMPT = """
 You are a planner for the Semantic Kernel.
@@ -117,8 +134,8 @@ class BasicPlanner:
         string for the prompt.
         """
         # Get a dictionary of skill names to all native and semantic functions
-        native_functions = kernel.skills.get_functions_view()._native_functions
-        semantic_functions = kernel.skills.get_functions_view()._semantic_functions
+        native_functions = kernel.skills.get_functions_view().native_functions
+        semantic_functions = kernel.skills.get_functions_view().semantic_functions
         native_functions.update(semantic_functions)
 
         # Create a mapping between all function names and their descriptions
@@ -187,7 +204,13 @@ class BasicPlanner:
         Given a plan, execute each of the functions within the plan
         from start to finish and output the result.
         """
-        generated_plan = json.loads(plan.generated_plan.result)
+
+        # Filter out good JSON from the result in case additional text is present
+        json_regex = r"\{(?:[^{}]|(?R))*\}"
+        generated_plan_string = regex.search(
+            json_regex, plan.generated_plan.result
+        ).group()
+        generated_plan = json.loads(generated_plan_string)
 
         context = ContextVariables()
         context["input"] = generated_plan["input"]

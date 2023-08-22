@@ -1,15 +1,17 @@
 # Copyright (c) Microsoft. All rights reserved.
 
+
 from semantic_kernel.orchestration.sk_context import SKContext
+from semantic_kernel.sk_pydantic import PydanticField
 from semantic_kernel.skill_definition import sk_function, sk_function_context_parameter
 
 
-class MathSkill:
+class MathSkill(PydanticField):
     """
     Description: MathSkill provides a set of functions to make Math calculations.
 
     Usage:
-        kernel.import_skill("math", new MathSkill())
+        kernel.import_skill(MathSkill(), skill_name="math")
 
     Examples:
         {{math.Add}}         => Returns the sum of initial_value_text and Amount (provided in the SKContext)
@@ -76,7 +78,8 @@ class MathSkill:
                 amount = int(context_amount)
             except ValueError:
                 raise ValueError(
-                    f"Context amount provided is not in numeric format: {context_amount}"
+                    "Context amount provided is not in numeric format:"
+                    f" {context_amount}"
                 )
 
             result = initial_value + amount if add else initial_value - amount

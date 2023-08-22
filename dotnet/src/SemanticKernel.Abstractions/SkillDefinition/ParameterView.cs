@@ -6,15 +6,13 @@ using Microsoft.SemanticKernel.Diagnostics;
 namespace Microsoft.SemanticKernel.SkillDefinition;
 
 /// <summary>
-/// Class used to copy and export data from
-/// <see cref="SKFunctionContextParameterAttribute"/>
-/// and <see cref="SKFunctionInputAttribute"/>
+/// Class used to copy and export data about parameters
 /// for planner and related scenarios.
 /// </summary>
 [DebuggerDisplay("{DebuggerDisplay,nq}")]
 public sealed class ParameterView
 {
-    private string _name = "";
+    private string _name = string.Empty;
 
     /// <summary>
     /// Parameter name. Alphanumeric chars + "_" only.
@@ -32,12 +30,17 @@ public sealed class ParameterView
     /// <summary>
     /// Parameter description.
     /// </summary>
-    public string Description { get; set; } = string.Empty;
+    public string? Description { get; set; }
 
     /// <summary>
     /// Default value when the value is not provided.
     /// </summary>
-    public string DefaultValue { get; set; } = string.Empty;
+    public string? DefaultValue { get; set; }
+
+    /// <summary>
+    /// Parameter type.
+    /// </summary>
+    public ParameterViewType? Type { get; set; }
 
     /// <summary>
     /// Constructor
@@ -52,16 +55,17 @@ public sealed class ParameterView
     /// <param name="name">Parameter name. The name must be alphanumeric (underscore is the only special char allowed).</param>
     /// <param name="description">Parameter description</param>
     /// <param name="defaultValue">Default parameter value, if not provided</param>
+    /// <param name="type">Parameter type.</param>
     public ParameterView(
         string name,
-        string description,
-        string defaultValue)
+        string? description = null,
+        string? defaultValue = null,
+        ParameterViewType? type = null)
     {
-        Verify.ValidFunctionParamName(name);
-
         this.Name = name;
         this.Description = description;
         this.DefaultValue = defaultValue;
+        this.Type = type;
     }
 
     [DebuggerBrowsable(DebuggerBrowsableState.Never)]

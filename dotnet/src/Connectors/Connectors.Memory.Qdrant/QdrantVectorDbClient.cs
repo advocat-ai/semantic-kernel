@@ -13,7 +13,6 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.SemanticKernel.AI;
 using Microsoft.SemanticKernel.Connectors.Memory.Qdrant.Diagnostics;
-using Microsoft.SemanticKernel.Connectors.Memory.Qdrant.Http;
 using Microsoft.SemanticKernel.Connectors.Memory.Qdrant.Http.ApiSchema;
 
 namespace Microsoft.SemanticKernel.Connectors.Memory.Qdrant;
@@ -22,61 +21,25 @@ namespace Microsoft.SemanticKernel.Connectors.Memory.Qdrant;
 /// An implementation of a client for the Qdrant Vector Database. This class is used to
 /// connect, create, delete, and get embeddings data from a Qdrant Vector Database instance.
 /// </summary>
-#pragma warning disable CA1001 // Types that own disposable fields should be disposable. Explanation - In this case, there is no need to dispose because either the NonDisposableHttpClientHandler or a custom HTTP client is being used.
+#pragma warning disable CA1001 // Types that own disposable fields should be disposable. No need to dispose the Http client here. It can either be an internal client using NonDisposableHttpClientHandler or an external client managed by the calling code, which should handle its disposal.
 public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
-#pragma warning restore CA1001 // Types that own disposable fields should be disposable.  Explanation - In this case, there is no need to dispose because either the NonDisposableHttpClientHandler or a custom HTTP client is being used.
+#pragma warning restore CA1001 // Types that own disposable fields should be disposable. No need to dispose the Http client here. It can either be an internal client using NonDisposableHttpClientHandler or an external client managed by the calling code, which should handle its disposal.
 {
-    /// <summary>
-    /// The endpoint for the Qdrant service.
-    /// </summary>
-    [Obsolete("This property is deprecated and will be removed in one of the next SK SDK versions.")]
-    public string BaseAddress => this._httpClient.BaseAddress.ToString();
-
-    /// <summary>
-    /// The port for the Qdrant service.
-    /// </summary>
-    [Obsolete("This property is deprecated and will be removed in one of the next SK SDK versions.")]
-    public int Port => this._httpClient.BaseAddress.Port;
-
-    /// <summary>
-    /// The constructor for the QdrantVectorDbClient.
-    /// </summary>
-    /// <param name="endpoint"></param>
-    /// <param name="vectorSize"></param>
-    /// <param name="port"></param>
-    /// <param name="httpClient"></param>
-    /// <param name="log"></param>
-    [Obsolete("This constructor is deprecated and will be removed in one of the next SK SDK versions. Please use one of the alternative constructors.")]
-    public QdrantVectorDbClient(
-        string endpoint,
-        int vectorSize,
-        int? port = null,
-        HttpClient? httpClient = null,
-        ILogger? log = null)
-    {
-        Verify.ArgNotNullOrEmpty(endpoint, "Qdrant endpoint cannot be null or empty");
-
-        this._vectorSize = vectorSize;
-        this._logger = log ?? NullLogger<QdrantVectorDbClient>.Instance;
-        this._httpClient = httpClient ?? new HttpClient(HttpHandlers.CheckCertificateRevocation);
-        this._httpClient.BaseAddress = SanitizeEndpoint(endpoint, port);
-    }
-
     /// <summary>
     /// Initializes a new instance of the <see cref="QdrantVectorDbClient"/> class.
     /// </summary>
     /// <param name="endpoint">The Qdrant Vector Database endpoint.</param>
     /// <param name="vectorSize">The size of the vectors used in the Qdrant Vector Database.</param>
-    /// <param name="logger">Optional logger instance.</param>
+    /// <param name="loggerFactory">The <see cref="ILoggerFactory"/> to use for logging. If null, no logging will be performed.</param>
     public QdrantVectorDbClient(
         string endpoint,
         int vectorSize,
-        ILogger? logger = null)
+        ILoggerFactory? loggerFactory = null)
     {
         this._vectorSize = vectorSize;
         this._httpClient = new HttpClient(NonDisposableHttpClientHandler.Instance, disposeHandler: false);
         this._httpClient.BaseAddress = SanitizeEndpoint(endpoint);
-        this._logger = logger ?? NullLogger<QdrantVectorDbClient>.Instance;
+        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(QdrantVectorDbClient)) : NullLogger.Instance;
     }
 
     /// <summary>
@@ -85,12 +48,12 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     /// <param name="httpClient">The <see cref="HttpClient"/> instance used for making HTTP requests.</param>
     /// <param name="vectorSize">The size of the vectors used in the Qdrant Vector Database.</param>
     /// <param name="endpoint">The optional endpoint URL for the Qdrant Vector Database. If not specified, the base address of the HTTP client is used.</param>
-    /// <param name="logger">Optional logger instance.</param>
+    /// <param name="loggerFactory">The <see cref="ILoggerFactory"/> to use for logging. If null, no logging will be performed.</param>
     public QdrantVectorDbClient(
         HttpClient httpClient,
         int vectorSize,
         string? endpoint = null,
-        ILogger? logger = null)
+        ILoggerFactory? loggerFactory = null)
     {
         if (string.IsNullOrEmpty(httpClient.BaseAddress?.AbsoluteUri) && string.IsNullOrEmpty(endpoint))
         {
@@ -102,7 +65,7 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         this._httpClient = httpClient;
         this._vectorSize = vectorSize;
         this._endpointOverride = string.IsNullOrEmpty(endpoint) ? null : SanitizeEndpoint(endpoint!);
-        this._logger = logger ?? NullLogger<QdrantVectorDbClient>.Instance;
+        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(QdrantVectorDbClient)) : NullLogger.Instance;
     }
 
     /// <inheritdoc/>
@@ -149,7 +112,7 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         {
             yield return new QdrantVectorRecord(
                 pointId: record.Id,
-                embedding: record.Vector ?? Array.Empty<float>(),
+                embedding: record.Vector ?? default,
                 record.Payload,
                 tags: null);
         }
@@ -196,7 +159,7 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
 
         var record = new QdrantVectorRecord(
             pointId: point.Id,
-            embedding: point.Vector ?? Array.Empty<float>(),
+            embedding: point.Vector,
             payload: point.Payload,
             tags: null);
         this._logger.LogDebug("Vector found}");
@@ -309,7 +272,7 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     /// <inheritdoc/>
     public async IAsyncEnumerable<(QdrantVectorRecord, double)> FindNearestInCollectionAsync(
         string collectionName,
-        IEnumerable<float> target,
+        ReadOnlyMemory<float> target,
         double threshold,
         int top = 1,
         bool withVectors = false,
@@ -360,7 +323,7 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         {
             var record = new QdrantVectorRecord(
                 pointId: v.Id,
-                embedding: v.Vector ?? Array.Empty<float>(),
+                embedding: v.Vector,
                 payload: v.Payload);
 
             result.Add((record, v.Score ?? 0.0));
@@ -496,13 +459,14 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         HttpResponseMessage response = await this._httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
 
         string responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+
         if (response.IsSuccessStatusCode)
         {
-            this._logger.LogTrace("Qdrant responded successfully");
+            this._logger.LogDebug("Qdrant responded successfully");
         }
         else
         {
-            this._logger.LogTrace("Qdrant responded with error");
+            this._logger.LogWarning("Qdrant responded with error");
         }
 
         return (response, responseContent);

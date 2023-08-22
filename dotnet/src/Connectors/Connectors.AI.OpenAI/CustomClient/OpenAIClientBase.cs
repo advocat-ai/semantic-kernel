@@ -12,7 +12,6 @@ using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.SemanticKernel.AI;
-using Microsoft.SemanticKernel.AI.Embeddings;
 using Microsoft.SemanticKernel.Connectors.AI.OpenAI.ImageGeneration;
 using Microsoft.SemanticKernel.Connectors.AI.OpenAI.TextEmbedding;
 using Microsoft.SemanticKernel.Diagnostics;
@@ -27,17 +26,17 @@ public abstract class OpenAIClientBase
     /// Initializes a new instance of the <see cref="OpenAIClientBase"/> class.
     /// </summary>
     /// <param name="httpClient">The HttpClient used for making HTTP requests.</param>
-    /// <param name="logger">The ILogger used for logging. If null, a NullLogger instance will be used.</param>
-    private protected OpenAIClientBase(HttpClient? httpClient, ILogger? logger = null)
+    /// <param name="loggerFactory">The ILoggerFactory used to create a logger for logging. If null, no logging will be performed.</param>
+    private protected OpenAIClientBase(HttpClient? httpClient, ILoggerFactory? loggerFactory = null)
     {
         this._httpClient = httpClient ?? new HttpClient(NonDisposableHttpClientHandler.Instance, disposeHandler: false);
-        this._log = logger ?? NullLogger.Instance;
+        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(this.GetType().Name) : NullLogger.Instance;
     }
 
     /// <summary>Adds headers to use for OpenAI HTTP requests.</summary>
     private protected virtual void AddRequestHeaders(HttpRequestMessage request)
     {
-        request.Headers.Add("User-Agent", HttpUserAgent);
+        request.Headers.Add("User-Agent", Telemetry.HttpUserAgent);
     }
 
     /// <summary>
@@ -48,7 +47,7 @@ public abstract class OpenAIClientBase
     /// <param name="cancellationToken">The <see cref="CancellationToken"/> to monitor for cancellation requests. The default is <see cref="CancellationToken.None"/>.</param>
     /// <returns>List of text embeddings</returns>
     /// <exception cref="AIException">AIException thrown during the request.</exception>
-    private protected async Task<IList<Embedding<float>>> ExecuteTextEmbeddingRequestAsync(
+    private protected async Task<IList<ReadOnlyMemory<float>>> ExecuteTextEmbeddingRequestAsync(
         string url,
         string requestBody,
         CancellationToken cancellationToken = default)
@@ -61,7 +60,7 @@ public abstract class OpenAIClientBase
                 "Embeddings not found");
         }
 
-        return result.Embeddings.Select(e => new Embedding<float>(e.Values, transferOwnership: true)).ToList();
+        return result.Embeddings.Select(e => e.Values).ToList();
     }
 
     /// <summary>
@@ -93,7 +92,7 @@ public abstract class OpenAIClientBase
         }
         catch (Exception ex) when (ex is NotSupportedException or JsonException)
         {
-            this._log.LogTrace("Unable to extract error from response body content. Exception: {0}:{1}", ex.GetType(), ex.Message);
+            this._logger.LogError(ex, "Unable to extract error from response body content. Exception: {0}:{1}", ex.GetType(), ex.Message);
         }
 
         return null;
@@ -101,13 +100,10 @@ public abstract class OpenAIClientBase
 
     #region private ================================================================================
 
-    // HTTP user agent sent to remote endpoints
-    private const string HttpUserAgent = "Microsoft-Semantic-Kernel";
-
     /// <summary>
     /// Logger
     /// </summary>
-    private readonly ILogger _log;
+    private readonly ILogger _logger;
 
     /// <summary>
     /// The HttpClient used for making HTTP requests.
@@ -145,9 +141,9 @@ public abstract class OpenAIClientBase
 
     private protected async Task<HttpResponseMessage> ExecuteRequestAsync(string url, HttpMethod method, HttpContent? content, CancellationToken cancellationToken = default)
     {
-        HttpResponseMessage? response = null;
         try
         {
+            HttpResponseMessage? response = null;
             using (var request = new HttpRequestMessage(method, url))
             {
                 this.AddRequestHeaders(request);
@@ -159,7 +155,7 @@ public abstract class OpenAIClientBase
                 response = await this._httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
             }
 
-            this._log.LogTrace("HTTP response: {0} {1}", (int)response.StatusCode, response.StatusCode.ToString("G"));
+            this._logger.LogDebug("HTTP response: {0} {1}", (int)response.StatusCode, response.StatusCode.ToString("G"));
 
             if (response.IsSuccessStatusCode)
             {

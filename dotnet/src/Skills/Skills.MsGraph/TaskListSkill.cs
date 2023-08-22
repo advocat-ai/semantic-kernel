@@ -2,7 +2,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.ComponentModel;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -16,7 +18,7 @@ namespace Microsoft.SemanticKernel.Skills.MsGraph;
 /// <summary>
 /// Task list skill (e.g. Microsoft To-Do)
 /// </summary>
-public class TaskListSkill
+public sealed class TaskListSkill
 {
     /// <summary>
     /// <see cref="ContextVariables"/> parameter names.
@@ -35,19 +37,19 @@ public class TaskListSkill
     }
 
     private readonly ITaskManagementConnector _connector;
-    private readonly ILogger<TaskListSkill> _logger;
+    private readonly ILogger _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TaskListSkill"/> class.
     /// </summary>
     /// <param name="connector">Task list connector.</param>
-    /// <param name="logger">Logger.</param>
-    public TaskListSkill(ITaskManagementConnector connector, ILogger<TaskListSkill>? logger = null)
+    /// <param name="loggerFactory">The <see cref="ILoggerFactory"/> to use for logging. If null, no logging will be performed.</param>
+    public TaskListSkill(ITaskManagementConnector connector, ILoggerFactory? loggerFactory = null)
     {
         Ensure.NotNull(connector, nameof(connector));
 
         this._connector = connector;
-        this._logger = logger ?? new NullLogger<TaskListSkill>();
+        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(TaskListSkill)) : NullLogger.Instance;
     }
 
     /// <summary>
@@ -71,59 +73,49 @@ public class TaskListSkill
     /// <summary>
     /// Add a task to a To-Do list with an optional reminder.
     /// </summary>
-    [SKFunction("Add a task to a task list with an optional reminder.")]
-    [SKFunctionInput(Description = "Title of the task.")]
-    [SKFunctionContextParameter(Name = Parameters.Reminder, Description = "Reminder for the task in DateTimeOffset (optional)")]
-    public async Task AddTaskAsync(string title, SKContext context)
+    [SKFunction, Description("Add a task to a task list with an optional reminder.")]
+    public async Task AddTaskAsync(
+        [Description("Title of the task.")] string title,
+        [Description("Reminder for the task in DateTimeOffset (optional)")] string? reminder = null,
+        CancellationToken cancellationToken = default)
     {
-        TaskManagementTaskList? defaultTaskList = await this._connector.GetDefaultTaskListAsync(context.CancellationToken).ConfigureAwait(false);
+        TaskManagementTaskList? defaultTaskList = await this._connector.GetDefaultTaskListAsync(cancellationToken).ConfigureAwait(false);
         if (defaultTaskList == null)
         {
-            context.Fail("No default task list found.");
-            return;
+            throw new InvalidOperationException("No default task list found.");
         }
 
         TaskManagementTask task = new(
             id: Guid.NewGuid().ToString(),
-            title: title);
+            title: title,
+            reminder: reminder);
 
-        if (context.Variables.TryGetValue(Parameters.Reminder, out string? reminder))
-        {
-            task.Reminder = reminder;
-        }
+        // Sensitive data, logging as trace, disabled by default
+        this._logger.LogTrace("Adding task '{0}' to task list '{1}'", task.Title, defaultTaskList.Name);
 
-        this._logger.LogInformation("Adding task '{0}' to task list '{1}'", task.Title, defaultTaskList.Name);
-        await this._connector.AddTaskAsync(defaultTaskList.Id, task, context.CancellationToken).ConfigureAwait(false);
+        await this._connector.AddTaskAsync(defaultTaskList.Id, task, cancellationToken).ConfigureAwait(false);
     }
 
     /// <summary>
     /// Get tasks from the default task list.
     /// </summary>
-    [SKFunction("Get tasks from the default task list.")]
-    [SKFunctionContextParameter(Name = Parameters.IncludeCompleted, Description = "Whether to include completed tasks (optional)", DefaultValue = "false")]
-    public async Task<string> GetDefaultTasksAsync(SKContext context)
+    [SKFunction, Description("Get tasks from the default task list.")]
+    public async Task<string> GetDefaultTasksAsync(
+        [Description("Whether to include completed tasks (optional)")] string includeCompleted = "false",
+        CancellationToken cancellationToken = default)
     {
-        TaskManagementTaskList? defaultTaskList = await this._connector.GetDefaultTaskListAsync(context.CancellationToken)
-            .ConfigureAwait(false);
-
+        TaskManagementTaskList? defaultTaskList = await this._connector.GetDefaultTaskListAsync(cancellationToken).ConfigureAwait(false);
         if (defaultTaskList == null)
         {
-            context.Fail("No default task list found.");
-            return string.Empty;
+            throw new InvalidOperationException("No default task list found.");
         }
 
-        bool includeCompleted = false;
-        if (context.Variables.TryGetValue(Parameters.IncludeCompleted, out string? includeCompletedString))
+        if (!bool.TryParse(includeCompleted, out bool includeCompletedValue))
         {
-            if (!bool.TryParse(includeCompletedString, out includeCompleted))
-            {
-                this._logger.LogWarning("Invalid value for '{0}' variable: '{1}'", Parameters.IncludeCompleted, includeCompletedString);
-            }
+            this._logger.LogWarning("Invalid value for '{0}' variable: '{1}'", nameof(includeCompleted), includeCompleted);
         }
 
-        IEnumerable<TaskManagementTask> tasks = await this._connector.GetTasksAsync(defaultTaskList.Id, includeCompleted, context.CancellationToken)
-            .ConfigureAwait(false);
-
+        IEnumerable<TaskManagementTask> tasks = await this._connector.GetTasksAsync(defaultTaskList.Id, includeCompletedValue, cancellationToken).ConfigureAwait(false);
         return JsonSerializer.Serialize(tasks);
     }
 }

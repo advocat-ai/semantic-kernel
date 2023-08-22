@@ -17,6 +17,7 @@ using Microsoft.SemanticKernel.Connectors.AI.OpenAI.Tokenizers;
 using Microsoft.SemanticKernel.Orchestration;
 using Microsoft.SemanticKernel.Planning;
 using Microsoft.SemanticKernel.Skills.OpenAPI.Authentication;
+using Microsoft.SemanticKernel.Skills.OpenAPI.Extensions;
 
 namespace OpenApiSkillsExample;
 
@@ -45,7 +46,7 @@ internal sealed class Program
                 .AddConsole()
                 .AddDebug());
 
-        ILogger<Program> logger = loggerFactory.CreateLogger<Program>();
+        ILogger logger = loggerFactory.CreateLogger<Program>();
 
         // Initialize semantic kernel
         AIServiceOptions aiOptions = configuration.GetRequiredSection(AIServiceOptions.PropertyName).Get<AIServiceOptions>()
@@ -74,10 +75,10 @@ internal sealed class Program
 
         BearerAuthenticationProvider authenticationProvider = new(() => Task.FromResult(gitHubOptions.Key));
 
-        await kernel.ImportOpenApiSkillFromFileAsync(
+        await kernel.ImportAIPluginAsync(
             skillName: "GitHubSkill",
             filePath: Path.Combine(Path.GetDirectoryName(Assembly.GetExecutingAssembly().Location)!, "GitHubSkill/openapi.json"),
-            authCallback: authenticationProvider.AuthenticateRequestAsync);
+            new OpenApiSkillExecutionParameters(authCallback: authenticationProvider.AuthenticateRequestAsync));
 
         // Use a planner to decide when to call the GitHub skill. Since we are not chaining operations, use
         // the ActionPlanner which is a simplified planner that will always return a 0 or 1 step plan.
@@ -113,7 +114,7 @@ internal sealed class Program
             int tokenCount = GPT3Tokenizer.Encode(JsonSerializer.Serialize(chatHistory)).Count;
             while (tokenCount > aiOptions.TokenLimit)
             {
-                chatHistory.Messages.RemoveAt(0);
+                chatHistory.Messages.RemoveAt(1);
                 tokenCount = GPT3Tokenizer.Encode(JsonSerializer.Serialize(chatHistory)).Count;
             }
             Console.WriteLine($"(tokens: {tokenCount})");
@@ -144,7 +145,7 @@ internal sealed class Program
         SKContext planContext = await plan.InvokeAsync(logger: logger);
         if (planContext.ErrorOccurred)
         {
-            logger.LogError("{0}", planContext.LastErrorDescription);
+            logger.LogError(planContext.LastException!, "Unexpected failure executing plan");
             return string.Empty;
         }
         else if (string.IsNullOrWhiteSpace(planContext.Result))
@@ -212,11 +213,11 @@ internal sealed class Program
         }
         catch (JsonException)
         {
-            logger.LogDebug("Unable to extract JSON from planner response, it is likely not from an OpenAPI skill.");
+            logger.LogWarning("Unable to extract JSON from planner response, it is likely not from an OpenAPI skill.");
         }
         catch (InvalidOperationException)
         {
-            logger.LogDebug("Unable to extract JSON from planner response, it may already be proper JSON.");
+            logger.LogWarning("Unable to extract JSON from planner response, it may already be proper JSON.");
         }
 
         json = string.Empty;

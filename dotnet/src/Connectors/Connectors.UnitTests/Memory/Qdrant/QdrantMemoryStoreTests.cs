@@ -7,10 +7,8 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
-using Microsoft.SemanticKernel.AI.Embeddings;
-using Microsoft.SemanticKernel.Connectors.Memory.Pinecone;
 using Microsoft.SemanticKernel.Connectors.Memory.Qdrant;
-using Microsoft.SemanticKernel.Connectors.Memory.Qdrant.Diagnostics;
+using Microsoft.SemanticKernel.Diagnostics;
 using Microsoft.SemanticKernel.Memory;
 using Moq;
 using Xunit;
@@ -31,20 +29,10 @@ public class QdrantMemoryStoreTests
     private readonly string _description = "description";
     private readonly string _description2 = "description2";
     private readonly string _description3 = "description3";
-    private readonly Embedding<float> _embedding = new(new float[] { 1, 1, 1 });
-    private readonly Embedding<float> _embedding2 = new(new float[] { 2, 2, 2 });
-    private readonly Embedding<float> _embedding3 = new(new float[] { 3, 3, 3 });
-    private readonly Mock<ILogger<PineconeMemoryStore>> _mockLogger = new();
-
-    [Fact]
-    [Obsolete("This method is deprecated and will be removed in one of the next SK SDK versions.")]
-    public void ConnectionCanBeInitialized()
-    {
-        // Arrange
-        var httpMock = new Mock<HttpClient>();
-        var qdrantClient = new QdrantVectorDbClient("http://localhost", 3, 1000, httpMock.Object);
-        var db = new QdrantMemoryStore(qdrantClient);
-    }
+    private readonly ReadOnlyMemory<float> _embedding = new float[] { 1, 1, 1 };
+    private readonly ReadOnlyMemory<float> _embedding2 = new float[] { 2, 2, 2 };
+    private readonly ReadOnlyMemory<float> _embedding3 = new float[] { 3, 3, 3 };
+    private readonly Mock<ILoggerFactory> _mockLogger = new();
 
     [Fact]
     public async Task ItCreatesNewCollectionAsync()
@@ -161,7 +149,7 @@ public class QdrantMemoryStoreTests
         var vectorStore = new QdrantMemoryStore(mockQdrantClient.Object, this._mockLogger.Object);
 
         // Assert
-        await Assert.ThrowsAsync<QdrantMemoryException>(() => vectorStore.UpsertAsync("test_collection", memoryRecord));
+        await Assert.ThrowsAsync<SKException>(() => vectorStore.UpsertAsync("test_collection", memoryRecord));
     }
 
     [Fact]
@@ -213,7 +201,7 @@ public class QdrantMemoryStoreTests
 
         var qdrantVectorRecord = QdrantVectorRecord.FromJsonMetadata(
             key,
-            memoryRecord.Embedding.Vector,
+            memoryRecord.Embedding,
             memoryRecord.GetSerializedMetadata());
 
         var mockQdrantClient = new Mock<IQdrantVectorDbClient>();
