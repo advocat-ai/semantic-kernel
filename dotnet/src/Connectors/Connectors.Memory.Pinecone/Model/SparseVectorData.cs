@@ -2,14 +2,15 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json.Serialization;
-using Microsoft.SemanticKernel.Text;
 
-namespace Microsoft.SemanticKernel.Connectors.Memory.Pinecone.Model;
+namespace Microsoft.SemanticKernel.Connectors.Pinecone;
 
 /// <summary>
-/// Vector sparse data. Represented as a list of indices and a list of corresponded values, which must be the same length.
+/// Represents a sparse vector data, which is a list of indices and a list of corresponding values, both of the same length.
 /// </summary>
+[Experimental("SKEXP0020")]
 public class SparseVectorData
 {
     /// <summary>
@@ -24,9 +25,14 @@ public class SparseVectorData
     /// </summary>
     /// <value>The corresponding values of the sparse data, which must be the same length as the indices.</value>
     [JsonPropertyName("values")]
-    [JsonConverter(typeof(ReadOnlyMemoryConverter))]
     public ReadOnlyMemory<float> Values { get; set; }
 
+    /// <summary>
+    /// Creates a new instance of the <see cref="SparseVectorData"/> class with the specified indices and values.
+    /// </summary>
+    /// <param name="indices">The indices of the sparse data.</param>
+    /// <param name="values">The corresponding values of the sparse data, which must be the same length as the indices.</param>
+    /// <returns>A new instance of the <see cref="SparseVectorData"/> class.</returns>
     public static SparseVectorData CreateSparseVectorData(List<long> indices, ReadOnlyMemory<float> values)
     {
         return new SparseVectorData(indices, values);

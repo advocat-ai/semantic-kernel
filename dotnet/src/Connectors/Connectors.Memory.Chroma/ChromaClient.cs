@@ -10,11 +10,9 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.SemanticKernel.Connectors.Memory.Chroma.Http.ApiSchema;
-using Microsoft.SemanticKernel.Connectors.Memory.Chroma.Http.ApiSchema.Internal;
-using Microsoft.SemanticKernel.Diagnostics;
+using Microsoft.SemanticKernel.Http;
 
-namespace Microsoft.SemanticKernel.Connectors.Memory.Chroma;
+namespace Microsoft.SemanticKernel.Connectors.Chroma;
 
 /// <summary>
 /// An implementation of a client for the Chroma Vector DB. This class is used to
@@ -31,9 +29,11 @@ public class ChromaClient : IChromaClient
     /// <param name="loggerFactory">The <see cref="ILoggerFactory"/> to use for logging. If null, no logging will be performed.</param>
     public ChromaClient(string endpoint, ILoggerFactory? loggerFactory = null)
     {
-        this._httpClient = new HttpClient(NonDisposableHttpClientHandler.Instance, disposeHandler: false);
+        Verify.NotNull(endpoint);
+
+        this._httpClient = HttpClientProvider.GetHttpClient();
         this._endpoint = endpoint;
-        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(ChromaClient)) : NullLogger.Instance;
+        this._logger = loggerFactory?.CreateLogger(typeof(ChromaClient)) ?? NullLogger.Instance;
     }
 
     /// <summary>
@@ -42,17 +42,17 @@ public class ChromaClient : IChromaClient
     /// <param name="httpClient">The <see cref="HttpClient"/> instance used for making HTTP requests.</param>
     /// <param name="endpoint">Chroma server endpoint URL.</param>
     /// <param name="loggerFactory">The <see cref="ILoggerFactory"/> to use for logging. If null, no logging will be performed.</param>
-    /// <exception cref="SKException">Occurs when <see cref="HttpClient"/> doesn't have base address and endpoint parameter is not provided.</exception>
+    /// <exception cref="KernelException">Occurs when <see cref="HttpClient"/> doesn't have base address and endpoint parameter is not provided.</exception>
     public ChromaClient(HttpClient httpClient, string? endpoint = null, ILoggerFactory? loggerFactory = null)
     {
         if (string.IsNullOrEmpty(httpClient.BaseAddress?.AbsoluteUri) && string.IsNullOrEmpty(endpoint))
         {
-            throw new SKException("The HttpClient BaseAddress and endpoint are both null or empty. Please ensure at least one is provided.");
+            throw new ArgumentException($"The {nameof(httpClient)}.{nameof(HttpClient.BaseAddress)} and {nameof(endpoint)} are both null or empty. Please ensure at least one is provided.");
         }
 
         this._httpClient = httpClient;
         this._endpoint = endpoint;
-        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(ChromaClient)) : NullLogger.Instance;
+        this._logger = loggerFactory?.CreateLogger(typeof(ChromaClient)) ?? NullLogger.Instance;
     }
 
     /// <inheritdoc />
@@ -166,25 +166,27 @@ public class ChromaClient : IChromaClient
         HttpRequestMessage request,
         CancellationToken cancellationToken = default)
     {
-        string endpoint = this._endpoint ?? this._httpClient.BaseAddress.ToString();
+        string endpoint = this._endpoint ?? this._httpClient.BaseAddress!.ToString();
         endpoint = this.SanitizeEndpoint(endpoint);
 
-        string operationName = request.RequestUri.ToString();
+        string operationName = request.RequestUri!.ToString();
 
         request.RequestUri = new Uri(new Uri(endpoint), operationName);
 
-        HttpResponseMessage response = await this._httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        HttpResponseMessage? response = null;
 
-        string responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
+        string? responseContent = null;
 
         try
         {
-            response.EnsureSuccessStatusCode();
+            response = await this._httpClient.SendWithSuccessCheckAsync(request, cancellationToken).ConfigureAwait(false);
+
+            responseContent = await response.Content.ReadAsStringWithExceptionMappingAsync(cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e)
         {
-            this._logger.LogError(e, "{0} {1} operation failed: {2}, {3}", request.Method.Method, operationName, e.Message, responseContent);
-            throw new SKException($"{request.Method.Method} {operationName} operation failed: {e.Message}, {responseContent}", e);
+            this._logger.LogError(e, "{Method} {Path} operation failed: {Message}, {Response}", request.Method.Method, operationName, e.Message, e.ResponseContent);
+            throw;
         }
 
         return (response, responseContent);

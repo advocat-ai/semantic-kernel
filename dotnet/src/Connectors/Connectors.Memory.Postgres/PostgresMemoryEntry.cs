@@ -1,13 +1,15 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
 using System;
+using System.Diagnostics.CodeAnalysis;
 using Pgvector;
 
-namespace Microsoft.SemanticKernel.Connectors.Memory.Postgres;
+namespace Microsoft.SemanticKernel.Connectors.Postgres;
 
 /// <summary>
 /// A postgres memory entry.
 /// </summary>
+[Experimental("SKEXP0020")]
 public record struct PostgresMemoryEntry
 {
     /// <summary>
@@ -16,7 +18,7 @@ public record struct PostgresMemoryEntry
     public string Key { get; set; }
 
     /// <summary>
-    /// Metadata as a string.
+    /// Attributes as a string.
     /// </summary>
     public string MetadataString { get; set; }
 

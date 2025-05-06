@@ -1,8 +1,7 @@
 ﻿// Copyright (c) Microsoft. All rights reserved.
 
-using Microsoft.SemanticKernel.Diagnostics;
+using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.TemplateEngine;
-using Microsoft.SemanticKernel.TemplateEngine.Blocks;
 using Xunit;
 
 namespace SemanticKernel.UnitTests.TemplateEngine;
@@ -116,6 +115,40 @@ public class CodeTokenizerTests
     }
 
     [Fact]
+    public void ItParsesMultiNamedArgFunctionCalls()
+    {
+        // Arrange
+        var template1 = "x.y first=$foo second='bar'";
+        var arguments = new KernelArguments
+        {
+            ["foo"] = "fooValue"
+        };
+
+        // Act
+        var blocks1 = this._target.Tokenize(template1);
+
+        // Assert
+        Assert.Equal(3, blocks1.Count);
+
+        var firstBlock = blocks1[0];
+        var secondBlock = blocks1[1] as NamedArgBlock;
+        var thirdBlock = blocks1[2] as NamedArgBlock;
+
+        Assert.Equal("x.y", firstBlock.Content);
+        Assert.Equal(BlockTypes.FunctionId, firstBlock.Type);
+
+        Assert.Equal("first=$foo", secondBlock?.Content);
+        Assert.Equal(BlockTypes.NamedArg, secondBlock?.Type);
+        Assert.Equal("first", secondBlock?.Name);
+        Assert.Equal("fooValue", secondBlock?.GetValue(arguments));
+
+        Assert.Equal("second='bar'", thirdBlock?.Content);
+        Assert.Equal(BlockTypes.NamedArg, thirdBlock?.Type);
+        Assert.Equal("second", thirdBlock?.Name);
+        Assert.Equal("bar", thirdBlock?.GetValue(arguments));
+    }
+
+    [Fact]
     public void ItSupportsEscaping()
     {
         // Arrange
@@ -130,12 +163,60 @@ public class CodeTokenizerTests
         Assert.Equal("'f\'oo'", blocks[1].Content);
     }
 
+    [Fact]
+    public void ItSupportsEscapingNamedArgs()
+    {
+        // Arrange
+        var template = "func name='f\\'oo'";
+
+        // Act
+        var blocks = this._target.Tokenize(template);
+
+        // Assert
+        Assert.Equal(2, blocks.Count);
+        Assert.Equal("func", blocks[0].Content);
+        Assert.Equal("name='f\'oo'", blocks[1].Content);
+        var namedArg = blocks[1] as NamedArgBlock;
+        Assert.NotNull(namedArg);
+        Assert.Equal("f'oo", namedArg.GetValue(null));
+    }
+
+    [Fact]
+    public void ItSupportsSpacesInNamedArguments()
+    {
+        // Arrange
+        var template = "func name = 'foo'";
+
+        // Act
+        var blocks = this._target.Tokenize(template);
+
+        // Assert
+        Assert.Equal(2, blocks.Count);
+        Assert.Equal("func", blocks[0].Content);
+        Assert.Equal("name='foo'", blocks[1].Content);
+        var namedArg = blocks[1] as NamedArgBlock;
+        Assert.NotNull(namedArg);
+        Assert.Equal("foo", namedArg.GetValue(null));
+        Assert.Equal("name", namedArg.Name);
+    }
+
     [Theory]
     [InlineData(@"call 'f\\'xy'")]
     [InlineData(@"call 'f\\'x")]
+    [InlineData("f name")]
     public void ItThrowsWhenSeparatorsAreMissing(string template)
     {
         // Act & Assert
-        Assert.Throws<SKException>(() => this._target.Tokenize(template));
+        Assert.Throws<KernelException>(() => this._target.Tokenize(template));
+    }
+
+    [Theory]
+    [InlineData("f a =")]
+    [InlineData("f a='b' arg2")]
+    public void ItThrowsWhenArgValueIsMissing(string template)
+    {
+        // Act & Assert
+        var exception = Assert.Throws<KernelException>(() => this._target.Tokenize(template));
+        Assert.Equal("A function named argument must contain a name and value separated by a '=' character.", exception.Message);
     }
 }

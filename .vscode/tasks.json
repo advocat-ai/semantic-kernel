@@ -77,7 +77,7 @@
       }
     },
     {
-      "label": "validate - (contributing-Format-Build-Test-Run)",
+      "label": "validate (contributing-Format-Build-Test-Run)",
       "detail": "Runs tasks to validate changes before checking in.",
       "group": "build",
       "dependsOn": [
@@ -222,17 +222,26 @@
         "cwd": "${workspaceFolder}/dotnet/src/IntegrationTests/"
       }
     },
+    {
+      "label": "build (CopilotAgentPluginsDemoSample)",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/dotnet/samples/Demos/CopilotAgentPlugins/CopilotAgentPluginsDemoSample/CopilotAgentPluginsDemoSample.csproj"
+      ]
+    },
     // ****************
     // Samples (dotnet)
     // ****************
     // Kernel Syntax Examples
     {
-      "label": "build (KernelSyntaxExamples)",
+      "label": "build (Concepts)",
       "command": "dotnet",
       "type": "process",
       "args": [
         "build",
-        "${workspaceFolder}/dotnet/samples/KernelSyntaxExamples/KernelSyntaxExamples.csproj",
+        "${workspaceFolder}/dotnet/samples/Concepts/Concepts.csproj",
         "/property:GenerateFullPaths=true",
         "/consoleloggerparameters:NoSummary",
         "/property:DebugType=portable"
@@ -241,26 +250,27 @@
       "group": "build"
     },
     {
-      "label": "watch (KernelSyntaxExamples)",
+      "label": "watch (Concepts)",
       "command": "dotnet",
       "type": "process",
       "args": [
         "watch",
         "run",
         "--project",
-        "${workspaceFolder}/dotnet/samples/KernelSyntaxExamples/KernelSyntaxExamples.csproj"
+        "${workspaceFolder}/dotnet/samples/Concepts/Concepts.csproj"
       ],
       "problemMatcher": "$msCompile",
       "group": "build"
     },
     {
-      "label": "run (KernelSyntaxExamples)",
+      "label": "run (Concepts)",
       "command": "dotnet",
       "type": "process",
       "args": [
         "run",
         "--project",
-        "${workspaceFolder}/dotnet/samples/KernelSyntaxExamples/KernelSyntaxExamples.csproj"
+        "${workspaceFolder}/dotnet/samples/Concepts/Concepts.csproj",
+        "${input:filter}"
       ],
       "problemMatcher": "$msCompile",
       "group": "test",
@@ -270,68 +280,37 @@
         "group": "PR-Validate"
       }
     },
-    // KernelHttpServer
     {
-      "label": "run (KernelHttpServer)",
-      "command": "func",
-      "type": "shell",
-      "args": ["start", "--csharp"],
-      "group": "test",
-      "options": {
-        "cwd": "${workspaceFolder}/samples/dotnet/KernelHttpServer"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "group": "Run-Samples"
-      }
+      "label": "build (ProcessWithDapr)",
+      "command": "dotnet",
+      "type": "process",
+      "args": [
+        "build",
+        "${workspaceFolder}/dotnet/samples/Demos/ProcessWithDapr/ProcessWithDapr.csproj",
+        "/property:GenerateFullPaths=true",
+        "/consoleloggerparameters:NoSummary",
+        "/property:DebugType=portable"
+      ],
+      "problemMatcher": "$msCompile",
+      "group": "build"
     },
-    // chat-summary-webapp-react
     {
-      "label": "run (Starter Chat WebApp React)",
-      "command": "yarn",
-      "type": "shell",
-      "args": ["start"],
-      "group": "test",
-      "options": {
-        "cwd": "${workspaceFolder}/samples/apps/chat-summary-webapp-react"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "group": "Run-Samples"
-      }
+      "label": "daprd-debug",
+      "type": "daprd",
+      "appId": "processwithdapr",
+      "logLevel": "debug",
+      "appPort": 5000,
+      "httpPort": 3500,
+      "dependsOn":["build (ProcessWithDapr)"]
     },
-    // book-creator-webapp-react
     {
-      "label": "run (Book Creator WebApp React)",
-      "command": "yarn",
+      "label": "dapr-down",
       "type": "shell",
-      "args": ["start"],
-      "group": "test",
-      "options": {
-        "cwd": "${workspaceFolder}/samples/apps/book-creator-webapp-react"
-      },
+      "command": ["dapr stop --app-id processwithdapr"],
       "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "group": "Run-Samples"
-      }
-    },
-    // auth-api-webapp-react
-    {
-      "label": "run (Auth API WebApp React)",
-      "command": "yarn",
-      "type": "shell",
-      "args": ["start"],
-      "group": "test",
-      "options": {
-        "cwd": "${workspaceFolder}/samples/apps/auth-api-webapp-react"
-      },
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "group": "Run-Samples"
+        "clear": true,
+        "close": true,
+        "reveal": "never"
       }
     }
   ],
@@ -340,7 +319,7 @@
       "id": "filter",
       "type": "promptString",
       "default": "",
-      "description": "Enter a filter for the tests"
+      "description": "Enter a filter to pass as argument or filter"
     }
   ]
 }

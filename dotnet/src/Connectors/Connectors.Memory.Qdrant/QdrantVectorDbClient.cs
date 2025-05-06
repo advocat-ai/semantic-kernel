@@ -2,6 +2,7 @@
 
 using System;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -11,17 +12,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.SemanticKernel.AI;
-using Microsoft.SemanticKernel.Connectors.Memory.Qdrant.Diagnostics;
-using Microsoft.SemanticKernel.Connectors.Memory.Qdrant.Http.ApiSchema;
+using Microsoft.SemanticKernel.Http;
 
-namespace Microsoft.SemanticKernel.Connectors.Memory.Qdrant;
+namespace Microsoft.SemanticKernel.Connectors.Qdrant;
 
 /// <summary>
 /// An implementation of a client for the Qdrant Vector Database. This class is used to
 /// connect, create, delete, and get embeddings data from a Qdrant Vector Database instance.
 /// </summary>
 #pragma warning disable CA1001 // Types that own disposable fields should be disposable. No need to dispose the Http client here. It can either be an internal client using NonDisposableHttpClientHandler or an external client managed by the calling code, which should handle its disposal.
+[Experimental("SKEXP0020")]
 public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
 #pragma warning restore CA1001 // Types that own disposable fields should be disposable. No need to dispose the Http client here. It can either be an internal client using NonDisposableHttpClientHandler or an external client managed by the calling code, which should handle its disposal.
 {
@@ -37,9 +37,9 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         ILoggerFactory? loggerFactory = null)
     {
         this._vectorSize = vectorSize;
-        this._httpClient = new HttpClient(NonDisposableHttpClientHandler.Instance, disposeHandler: false);
+        this._httpClient = HttpClientProvider.GetHttpClient();
         this._httpClient.BaseAddress = SanitizeEndpoint(endpoint);
-        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(QdrantVectorDbClient)) : NullLogger.Instance;
+        this._logger = loggerFactory?.CreateLogger(typeof(QdrantVectorDbClient)) ?? NullLogger.Instance;
     }
 
     /// <summary>
@@ -57,15 +57,13 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     {
         if (string.IsNullOrEmpty(httpClient.BaseAddress?.AbsoluteUri) && string.IsNullOrEmpty(endpoint))
         {
-            throw new AIException(
-                AIException.ErrorCodes.InvalidConfiguration,
-                "The HttpClient BaseAddress and endpoint are both null or empty. Please ensure at least one is provided.");
+            throw new ArgumentException($"The {nameof(httpClient)}.{nameof(HttpClient.BaseAddress)} and {nameof(endpoint)} are both null or empty. Please ensure at least one is provided.");
         }
 
         this._httpClient = httpClient;
         this._vectorSize = vectorSize;
         this._endpointOverride = string.IsNullOrEmpty(endpoint) ? null : SanitizeEndpoint(endpoint!);
-        this._logger = loggerFactory is not null ? loggerFactory.CreateLogger(nameof(QdrantVectorDbClient)) : NullLogger.Instance;
+        this._logger = loggerFactory?.CreateLogger(typeof(QdrantVectorDbClient)) ?? NullLogger.Instance;
     }
 
     /// <inheritdoc/>
@@ -80,20 +78,21 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
             .WithVectors(withVectors)
             .Build();
 
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        string? responseContent = null;
+
         try
         {
-            response.EnsureSuccessStatusCode();
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e)
         {
-            this._logger.LogDebug("Vectors not found {0}", e.Message);
-            yield break;
+            this._logger.LogError(e, "Vectors not found {Message}", e.Message);
+            throw;
         }
 
         var data = JsonSerializer.Deserialize<GetVectorsResponse>(responseContent);
 
-        if (data == null)
+        if (data is null)
         {
             this._logger.LogWarning("Unable to deserialize Get response");
             yield break;
@@ -130,20 +129,25 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
             .IncludeVectorData(withVector)
             .Build();
 
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        string? responseContent = null;
+
         try
         {
-            response.EnsureSuccessStatusCode();
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e) when (e.StatusCode == HttpStatusCode.NotFound)
         {
-            this._logger.LogDebug("Request for vector with payload ID failed {0}", e.Message);
             return null;
+        }
+        catch (HttpOperationException e)
+        {
+            this._logger.LogError(e, "Request for vector with payload ID failed {Message}", e.Message);
+            throw;
         }
 
         var data = JsonSerializer.Deserialize<SearchVectorsResponse>(responseContent);
 
-        if (data == null)
+        if (data is null)
         {
             this._logger.LogWarning("Unable to deserialize Search response");
             return null;
@@ -172,30 +176,33 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     {
         this._logger.LogDebug("Deleting vector by point ID");
 
-        Verify.NotNullOrEmpty(collectionName, "Collection name is empty");
-        Verify.NotNull(pointIds, "Qdrant point IDs are NULL");
+        Verify.NotNullOrWhiteSpace(collectionName);
+        Verify.NotNull(pointIds);
 
         using var request = DeleteVectorsRequest.DeleteFrom(collectionName)
             .DeleteRange(pointIds)
             .Build();
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+
+        string? responseContent = null;
 
         try
         {
-            response.EnsureSuccessStatusCode();
-            var result = JsonSerializer.Deserialize<QdrantResponse>(responseContent);
-            if (result?.Status == "ok")
-            {
-                this._logger.LogDebug("Vector being deleted");
-            }
-            else
-            {
-                this._logger.LogWarning("Vector delete failed");
-            }
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e)
         {
-            this._logger.LogError(e, "Vector delete request failed: {0}", e.Message);
+            this._logger.LogError(e, "Vector delete request failed: {Message}", e.Message);
+            throw;
+        }
+
+        var result = JsonSerializer.Deserialize<DeleteVectorsResponse>(responseContent);
+        if (result?.Status == "ok")
+        {
+            this._logger.LogDebug("Vector being deleted");
+        }
+        else
+        {
+            this._logger.LogWarning("Vector delete failed");
         }
     }
 
@@ -204,7 +211,7 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     {
         QdrantVectorRecord? existingRecord = await this.GetVectorByPayloadIdAsync(collectionName, metadataId, false, cancellationToken).ConfigureAwait(false);
 
-        if (existingRecord == null)
+        if (existingRecord is null)
         {
             this._logger.LogDebug("Vector not found, nothing to delete");
             return;
@@ -217,24 +224,26 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
             .DeleteVector(existingRecord.PointId)
             .Build();
 
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        string? responseContent = null;
 
         try
         {
-            response.EnsureSuccessStatusCode();
-            var result = JsonSerializer.Deserialize<QdrantResponse>(responseContent);
-            if (result?.Status == "ok")
-            {
-                this._logger.LogDebug("Vector being deleted");
-            }
-            else
-            {
-                this._logger.LogWarning("Vector delete failed");
-            }
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e)
         {
-            this._logger.LogError(e, "Vector delete request failed: {0}", e.Message);
+            this._logger.LogError(e, "Vector delete request failed: {Message}", e.Message);
+            throw;
+        }
+
+        var result = JsonSerializer.Deserialize<DeleteVectorsResponse>(responseContent);
+        if (result?.Status == "ok")
+        {
+            this._logger.LogDebug("Vector being deleted");
+        }
+        else
+        {
+            this._logger.LogWarning("Vector delete failed");
         }
     }
 
@@ -242,30 +251,33 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     public async Task UpsertVectorsAsync(string collectionName, IEnumerable<QdrantVectorRecord> vectorData, CancellationToken cancellationToken = default)
     {
         this._logger.LogDebug("Upserting vectors");
-        Verify.NotNull(vectorData, "The vector data entries are NULL");
-        Verify.NotNullOrEmpty(collectionName, "Collection name is empty");
+        Verify.NotNull(vectorData);
+        Verify.NotNullOrWhiteSpace(collectionName);
 
         using var request = UpsertVectorRequest.Create(collectionName)
             .UpsertRange(vectorData)
             .Build();
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+
+        string? responseContent = null;
 
         try
         {
-            response.EnsureSuccessStatusCode();
-            var result = JsonSerializer.Deserialize<UpsertVectorResponse>(responseContent);
-            if (result?.Status == "ok")
-            {
-                this._logger.LogDebug("Vectors upserted");
-            }
-            else
-            {
-                this._logger.LogWarning("Vector upserts failed");
-            }
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e)
         {
-            this._logger.LogError(e, "Vector upserts request failed: {0}", e.Message);
+            this._logger.LogError(e, "Vector upserts request failed: {Message}", e.Message);
+            throw;
+        }
+
+        var result = JsonSerializer.Deserialize<UpsertVectorResponse>(responseContent);
+        if (result?.Status == "ok")
+        {
+            this._logger.LogDebug("Vectors upserted");
+        }
+        else
+        {
+            this._logger.LogWarning("Vector upserts failed");
         }
     }
 
@@ -293,19 +305,21 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
             .Take(top)
             .Build();
 
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        string? responseContent = null;
 
-        if (response.StatusCode == HttpStatusCode.NotFound)
+        try
         {
-            this._logger.LogWarning("No vectors were found.");
-            yield break;
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-
-        response.EnsureSuccessStatusCode();
+        catch (HttpOperationException e)
+        {
+            this._logger.LogError(e, "Vectors search failed: {Message}", e.Message);
+            throw;
+        }
 
         var data = JsonSerializer.Deserialize<SearchVectorsResponse>(responseContent);
 
-        if (data == null)
+        if (data is null)
         {
             this._logger.LogWarning("Unable to deserialize Search response");
             yield break;
@@ -346,21 +360,24 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
             .Create(collectionName, this._vectorSize, QdrantDistanceType.Cosine)
             .Build();
 
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
-
-        // Creation is idempotent, ignore error (and for now ignore vector size)
-        if (response.StatusCode == HttpStatusCode.BadRequest)
-        {
-            if (responseContent.IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0) { return; }
-        }
-
         try
         {
-            response.EnsureSuccessStatusCode();
+            await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e) when (e.StatusCode == HttpStatusCode.BadRequest)
         {
-            this._logger.LogError(e, "Collection upsert failed: {0}, {1}", e.Message, responseContent);
+            // Creation is idempotent, ignore error (and for now ignore vector size)
+            if (e.ResponseContent?.IndexOf("already exists", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return;
+            }
+
+            this._logger.LogError(e, "Collection creation failed: {Message}, {Response}", e.Message, e.ResponseContent);
+            throw;
+        }
+        catch (HttpOperationException e)
+        {
+            this._logger.LogError(e, "Collection creation failed: {Message}, {Response}", e.Message, e.ResponseContent);
             throw;
         }
     }
@@ -371,21 +388,18 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         this._logger.LogDebug("Deleting collection {0}", collectionName);
 
         using var request = DeleteCollectionRequest.Create(collectionName).Build();
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
-
-        // Deletion is idempotent, ignore error
-        if (response.StatusCode == HttpStatusCode.NotFound)
-        {
-            return;
-        }
 
         try
         {
-            response.EnsureSuccessStatusCode();
+            await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
         }
-        catch (HttpRequestException e)
+        catch (HttpOperationException e) when (e.StatusCode == HttpStatusCode.NotFound)
         {
-            this._logger.LogError(e, "Collection deletion failed: {0}, {1}", e.Message, responseContent);
+            return; // Deletion is idempotent, ignore error
+        }
+        catch (HttpOperationException e)
+        {
+            this._logger.LogError(e, "Collection deletion failed: {Message}, {Response}", e.Message, e.ResponseContent);
             throw;
         }
     }
@@ -396,20 +410,22 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         this._logger.LogDebug("Fetching collection {0}", collectionName);
 
         using var request = GetCollectionsRequest.Create(collectionName).Build();
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
 
-        if (response.IsSuccessStatusCode)
+        try
         {
+            await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+
             return true;
         }
-        else if (response.StatusCode == HttpStatusCode.NotFound)
+        catch (HttpOperationException e) when (e.StatusCode == HttpStatusCode.NotFound)
         {
+            this._logger.LogDebug(e, "Collection {Name} not found: {Message}, {Response}", collectionName, e.Message, e.ResponseContent);
             return false;
         }
-        else
+        catch (HttpOperationException e)
         {
-            this._logger.LogError("Collection fetch failed: {0}, {1}", response.StatusCode, responseContent);
-            return false;
+            this._logger.LogError(e, "Collection fetch failed: {Message}, {Response}", e.Message, e.ResponseContent);
+            throw;
         }
     }
 
@@ -419,7 +435,18 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         this._logger.LogDebug("Listing collections");
 
         using var request = ListCollectionsRequest.Create().Build();
-        (HttpResponseMessage response, string responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+
+        string? responseContent = null;
+
+        try
+        {
+            (_, responseContent) = await this.ExecuteHttpRequestAsync(request, cancellationToken).ConfigureAwait(false);
+        }
+        catch (HttpOperationException e)
+        {
+            this._logger.LogError(e, "Collection listing failed: {Message}, {Response}", e.Message, e.ResponseContent);
+            throw;
+        }
 
         var collections = JsonSerializer.Deserialize<ListCollectionsResponse>(responseContent);
 
@@ -434,11 +461,11 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
     private readonly ILogger _logger;
     private readonly HttpClient _httpClient;
     private readonly int _vectorSize;
-    private readonly Uri? _endpointOverride = null;
+    private readonly Uri? _endpointOverride;
 
     private static Uri SanitizeEndpoint(string endpoint, int? port = null)
     {
-        Verify.IsValidUrl(nameof(endpoint), endpoint, false, true, false);
+        Verify.ValidateUrl(endpoint);
 
         UriBuilder builder = new(endpoint);
         if (port.HasValue) { builder.Port = port.Value; }
@@ -451,23 +478,14 @@ public sealed class QdrantVectorDbClient : IQdrantVectorDbClient
         CancellationToken cancellationToken = default)
     {
         //Apply endpoint override if it's specified.
-        if (this._endpointOverride != null)
+        if (this._endpointOverride is not null)
         {
-            request.RequestUri = new Uri(this._endpointOverride, request.RequestUri);
+            request.RequestUri = new Uri(this._endpointOverride, request.RequestUri!);
         }
 
-        HttpResponseMessage response = await this._httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+        HttpResponseMessage response = await this._httpClient.SendWithSuccessCheckAsync(request, cancellationToken).ConfigureAwait(false);
 
-        string responseContent = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
-
-        if (response.IsSuccessStatusCode)
-        {
-            this._logger.LogDebug("Qdrant responded successfully");
-        }
-        else
-        {
-            this._logger.LogWarning("Qdrant responded with error");
-        }
+        string responseContent = await response.Content.ReadAsStringWithExceptionMappingAsync(cancellationToken).ConfigureAwait(false);
 
         return (response, responseContent);
     }
